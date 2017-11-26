@@ -36,15 +36,15 @@ namespace uhd { namespace build_info {
     }
 
     const std::string build_date() {
-        return "@UHD_BUILD_DATE@";
+        return "Sat, 25 Nov 2017 02:40:24";
     }
 
     const std::string c_compiler() {
-        return "@UHD_C_COMPILER@";
+        return "GNU 8.0.0";
     }
 
     const std::string cxx_compiler() {
-        return "@UHD_CXX_COMPILER@";
+        return "GNU 8.0.0";
     }
 
 #ifdef _MSC_VER
@@ -55,27 +55,27 @@ namespace uhd { namespace build_info {
 
     const std::string c_flags() {
         return boost::algorithm::replace_all_copy(
-            (define_flag + std::string("@UHD_C_FLAGS@")),
+            (define_flag + std::string("UHD_IMAGES_DIR=OFF;HAVE_CONFIG_H")),
             std::string(";"), (" " + define_flag)
         );
     }
 
     const std::string cxx_flags() {
         return boost::algorithm::replace_all_copy(
-            (define_flag + std::string("@UHD_CXX_FLAGS@")),
+            (define_flag + std::string("UHD_IMAGES_DIR=OFF;HAVE_CONFIG_H -fvisibility=hidden -fvisibility-inlines-hidden")),
             std::string(";"), (" " + define_flag)
         );
     }
 
     const std::string enabled_components() {
         return boost::algorithm::replace_all_copy(
-            std::string("@_uhd_enabled_components@"),
+            std::string("LibUHD;LibUHD - C API;Examples;Utils;Tests;USB;B100;B200;USRP1;USRP2;X300;N230;OctoClock"),
             std::string(";"), std::string(", ")
         );
     }
 
     const std::string install_prefix() {
-        return "@CMAKE_INSTALL_PREFIX@";
+        return "/usr/local";
     }
 
     const std::string libusb_version() {

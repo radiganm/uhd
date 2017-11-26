@@ -33,7 +33,7 @@ UHD_STATIC_BLOCK(print_system_info){
 #endif
 
 std::string uhd::get_version_string(void){
-    return "@UHD_VERSION@";
+    return "003.010.002.000-3-g122bfae1";
 }
 
 std::string uhd::get_abi_string(void){

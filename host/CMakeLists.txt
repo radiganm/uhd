@@ -27,6 +27,8 @@ CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
 PROJECT(UHD CXX C)
 ENABLE_TESTING()
 
+set(CMAKE_CXX_FLAGS "-std=c++11 ${CMAKE_CXX_FLAGS}")
+
 #make sure our local CMake Modules path comes first
 list(INSERT CMAKE_MODULE_PATH 0 ${CMAKE_SOURCE_DIR}/cmake/Modules)
 
