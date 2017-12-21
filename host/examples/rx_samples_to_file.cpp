@@ -16,10 +16,11 @@
 //
 
 #include <uhd/types/tune_request.hpp>
-#include <uhd/utils/thread.hpp>
+#include <uhd/utils/thread_priority.hpp>
 #include <uhd/utils/safe_main.hpp>
 #include <uhd/usrp/multi_usrp.hpp>
 #include <uhd/exception.hpp>
+#include <uhd/transport/bounded_buffer.hpp>
 #include <boost/program_options.hpp>
 #include <boost/format.hpp>
 #include <boost/thread.hpp>
@@ -30,8 +31,32 @@
 
 namespace po = boost::program_options;
 
+struct write_info_t {
+    void *buff;
+    size_t len;
+};
+
+static const size_t NUM_BUFFERS = 1024;
 static bool stop_signal_called = false;
 void sig_int_handler(int){stop_signal_called = true;}
+uhd::transport::bounded_buffer<write_info_t *> g_empty_queue(NUM_BUFFERS);
+uhd::transport::bounded_buffer<write_info_t *> g_full_queue(NUM_BUFFERS);
+
+void write_to_file(std::string &filename)
+{
+    write_info_t *write_info;
+    std::ofstream outfile;
+    outfile.open(filename.c_str(), std::ofstream::binary);
+    while (not stop_signal_called)
+    {
+        if (g_full_queue.pop_with_timed_wait(write_info, 0.1))
+        {
+            outfile.write((const char*)write_info->buff, write_info->len);
+            g_empty_queue.push_with_wait(write_info);
+        }
+    }
+    outfile.close();
+}
 
 template<typename samp_type> void recv_to_file(
     uhd::usrp::multi_usrp::sptr usrp,
@@ -57,11 +82,21 @@ template<typename samp_type> void recv_to_file(
     uhd::rx_streamer::sptr rx_stream = usrp->get_rx_stream(stream_args);
 
     uhd::rx_metadata_t md;
-    std::vector<samp_type> buff(samps_per_buff);
-    std::ofstream outfile;
-    if (not null)
-        outfile.open(file.c_str(), std::ofstream::binary);
+    std::vector< std::vector<samp_type> > buffs(NUM_BUFFERS, std::vector<samp_type>(samps_per_buff));
+    write_info_t descriptors[NUM_BUFFERS];
+    for (size_t i = 0; i < NUM_BUFFERS; i++)
+    {
+	descriptors[i].buff = &buffs[i].front();
+        descriptors[i].len = 0;
+        g_empty_queue.push_with_haste(&descriptors[i]);
+    }
     bool overflow_message = true;
+    boost::thread_group thread_group;
+    if (not null)
+    {
+        thread_group.create_thread(boost::bind(&write_to_file, file));
+    }
+    boost::this_thread::sleep(boost::posix_time::milliseconds(100));
 
     //setup streaming
     uhd::stream_cmd_t stream_cmd((num_requested_samples == 0)?
@@ -85,7 +120,13 @@ template<typename samp_type> void recv_to_file(
     while(not stop_signal_called and (num_requested_samples != num_total_samps or num_requested_samples == 0)) {
         boost::system_time now = boost::get_system_time();
 
-        size_t num_rx_samps = rx_stream->recv(&buff.front(), buff.size(), md, 3.0, enable_size_map);
+        write_info_t *info;
+        if (not g_empty_queue.pop_with_haste(info))
+        {
+            std::cout << "No available buffers" << std::endl;
+            g_empty_queue.pop_with_wait(info);
+        }
+        size_t num_rx_samps = rx_stream->recv(info->buff, samps_per_buff, md, 3.0, enable_size_map);
 
         if (md.error_code == uhd::rx_metadata_t::ERROR_CODE_TIMEOUT) {
             std::cout << boost::format("Timeout while streaming") << std::endl;
@@ -123,8 +164,17 @@ template<typename samp_type> void recv_to_file(
 
         num_total_samps += num_rx_samps;
 
-        if (outfile.is_open())
-            outfile.write((const char*)&buff.front(), num_rx_samps*sizeof(samp_type));
+        if (null)
+        {
+            g_empty_queue.push_with_haste(info);
+        } else {
+            info->len = num_rx_samps * sizeof(samp_type);
+            if (not g_full_queue.push_with_haste(info))
+            {
+                std::cout << "Unable to push buffer into queue" << std::endl;
+                g_full_queue.push_with_wait(info);
+            }
+        }
 
         if (bw_summary) {
             last_update_samps += num_rx_samps;
@@ -145,11 +195,15 @@ template<typename samp_type> void recv_to_file(
         }
     }
 
+    stop_signal_called = true;
+
     stream_cmd.stream_mode = uhd::stream_cmd_t::STREAM_MODE_STOP_CONTINUOUS;
     rx_stream->issue_stream_cmd(stream_cmd);
 
-    if (outfile.is_open())
-        outfile.close();
+    while (md.error_code != uhd::rx_metadata_t::ERROR_CODE_TIMEOUT)
+    {
+        rx_stream->recv(&buffs[0].front(), samps_per_buff, md, 0.1, enable_size_map);
+    }    
 
     if (stats) {
         std::cout << std::endl;
@@ -236,7 +290,7 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
         ("channel", po::value<std::string>(&channel)->default_value("0"), "which channel to use")
         ("bw", po::value<double>(&bw), "analog frontend filter bandwidth in Hz")
         ("ref", po::value<std::string>(&ref)->default_value("internal"), "reference source (internal, external, mimo)")
-        ("wirefmt", po::value<std::string>(&wirefmt)->default_value("sc16"), "wire format (sc8, sc16 or s16)")
+        ("wirefmt", po::value<std::string>(&wirefmt)->default_value("sc16"), "wire format (sc8 or sc16)")
         ("setup", po::value<double>(&setup_time)->default_value(1.0), "seconds of setup time")
         ("progress", "periodically display short-term bandwidth")
         ("stats", "show average bandwidth on exit")
@@ -336,17 +390,10 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
 #define recv_to_file_args(format) \
     (usrp, format, wirefmt, channel, file, spb, total_num_samps, total_time, bw_summary, stats, null, enable_size_map, continue_on_bad_packet)
     //recv to file
-    if (wirefmt == "s16") {
-        if (type == "double") recv_to_file<double>recv_to_file_args("f64");
-        else if (type == "float") recv_to_file<float>recv_to_file_args("f32");
-        else if (type == "short") recv_to_file<short>recv_to_file_args("s16");
-        else throw std::runtime_error("Unknown type " + type);
-    } else {
-        if (type == "double") recv_to_file<std::complex<double> >recv_to_file_args("fc64");
-        else if (type == "float") recv_to_file<std::complex<float> >recv_to_file_args("fc32");
-        else if (type == "short") recv_to_file<std::complex<short> >recv_to_file_args("sc16");
-        else throw std::runtime_error("Unknown type " + type);
-    }
+    if (type == "double") recv_to_file<std::complex<double> >recv_to_file_args("fc64");
+    else if (type == "float") recv_to_file<std::complex<float> >recv_to_file_args("fc32");
+    else if (type == "short") recv_to_file<std::complex<short> >recv_to_file_args("sc16");
+    else throw std::runtime_error("Unknown type " + type);
 
     //finished
     std::cout << std::endl << "Done!" << std::endl << std::endl;
