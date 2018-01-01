@@ -44,6 +44,21 @@
 #include "boost/date_time/posix_time/posix_time.hpp"
 #endif
 
+#include <errno.h>
+#include <assert.h>
+#include <syslog.h>
+#include <stdarg.h>
+
+static inline void logMsg(const char *fmt, ...)
+{
+  va_list vl;
+  va_start(vl,fmt);
+  const size_t BUFSIZE = 1024;
+  char message[BUFSIZE];
+  vsprintf(message, fmt, vl);
+  syslog(LOG_INFO, "%-24s +%04d: %s",  __FILE__, __LINE__, message);
+}
+
 namespace uhd{ namespace transport{ namespace sph{
 
 UHD_INLINE uint32_t get_context_code(
@@ -461,6 +476,55 @@ private:
         _props[index].packet_count = (info.ifpi.packet_count + 1) & seq_mask;
         if (expected_packet_count != info.ifpi.packet_count){
             //UHD_LOGGER_INFO("STREAMER") << "expected: " << expected_packet_count << " got: " << info.ifpi.packet_count;
+          #ifndef DEBUG__DISABLE_SYSLOG
+            const size_t BUFSIZE = 200;
+            char packet_type[BUFSIZE];
+            switch(info.ifpi.packet_type)
+            {
+              case vrt::if_packet_info_t::PACKET_TYPE_DATA:    // 0x00
+                snprintf(packet_type, BUFSIZE, "%s", "DATA");
+                break;
+              case vrt::if_packet_info_t::PACKET_TYPE_IF_EXT:  // 0x01
+                snprintf(packet_type, BUFSIZE, "%s", "IF_EXT or FC or ACK");
+                break;
+              case vrt::if_packet_info_t::PACKET_TYPE_CONTEXT: // 0x02
+                snprintf(packet_type, BUFSIZE, "%s", "CONTEXT or CMD");
+                break;
+              case vrt::if_packet_info_t::PACKET_TYPE_ERROR:   // 0x03
+                snprintf(packet_type, BUFSIZE, "%s", "RESP or ERROR");
+                break;
+#ifdef DEBUG__NOT_ENUMERABLE
+//            case vrt::if_packet_info_t::PACKET_TYPE_DATA:    // 0x00
+//              snprintf(packet_type, BUFSIZE, "%s", "DATA");
+//              break;
+//            case vrt::if_packet_info_t::PACKET_TYPE_IF_EXT:  // 0x01
+//              snprintf(packet_type, BUFSIZE, "%s", "IF_EXT");
+//              break;
+//            case vrt::if_packet_info_t::PACKET_TYPE_CONTEXT: // 0x02
+//              snprintf(packet_type, BUFSIZE, "%s", "CONTEXT");
+//              break;
+//            case vrt::if_packet_info_t::PACKET_TYPE_FC:      // 0x01
+//              snprintf(packet_type, BUFSIZE, "%s", "FC");
+//              break;
+//            case vrt::if_packet_info_t::PACKET_TYPE_ACK:     // 0x01
+//              snprintf(packet_type, BUFSIZE, "%s", "ACK");
+//              break;
+//            case vrt::if_packet_info_t::PACKET_TYPE_CMD:     // 0x02
+//              snprintf(packet_type, BUFSIZE, "%s", "CMD");
+//              break;
+//            case vrt::if_packet_info_t::PACKET_TYPE_RESP:    // 0x03
+//              snprintf(packet_type, BUFSIZE, "%s", "RESP");
+//              break;
+//            case vrt::if_packet_info_t::PACKET_TYPE_ERROR:   // 0x03
+//              snprintf(packet_type, BUFSIZE, "%s", "ERROR");
+//              break;
+#endif // DEBUG__NOT_ENUMERABLE
+              default:
+                perror("unreahable - invalid packet type");
+                assert(-1);
+            }
+            logMsg("UHD  expected:%ld  got:%ld  payload:%ld  type:%s\n", expected_packet_count, info.ifpi.packet_count, info.ifpi.num_payload_bytes, packet_type);
+          #endif // DEBUG__DISABLE_SYSLOG
             if (_props[index].handle_flowctrl) {
                 // Always update flow control in this case, because we don't
                 // know which packet was dropped and what state the upstream
